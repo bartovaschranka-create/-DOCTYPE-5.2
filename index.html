@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Kontrolní protokoly">
 <title>Kontrolní protokoly</title>
+<link rel="manifest" href="manifest.json">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#eef4fb;--panel:#ffffff;--panel2:#f8fbff;--text:#0f172a;--muted:#64748b;--line:#dbe6f2;--primary:#2563eb;--primary2:#1d4ed8;--danger:#dc2626;--ok:#16a34a;--shadow:0 10px 30px rgba(15,23,42,.08);--radius:18px}
@@ -119,9 +120,9 @@ input::placeholder, textarea::placeholder{color:#334155;font-weight:600;font-siz
 </div></div></div>
 
 <script src="https://unpkg.com/html5-qrcode"></script>
-<script type="module">
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.12.1/firebase-app.js';
-import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, getDocs } from 'https://www.gstatic.com/firebasejs/12.12.1/firebase-firestore.js';
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+<script>
 
 const firebaseConfig = {
   apiKey: 'AIzaSyAd6tzkBeYEm9SM7wlxO0T1w_7v1KXtUJM',
@@ -247,8 +248,59 @@ function getStepsForRecord(record){
   return dynamicSteps;
 }
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+let firebaseAvailable = false;
+let db = null;
+try {
+  if (window.firebase && firebase.initializeApp && firebase.firestore) {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    firebaseAvailable = true;
+  }
+} catch(e) {
+  console.warn('Firebase není dostupný, přepínám na lokální režim.', e);
+  firebaseAvailable = false;
+}
+function loadLocalData(){
+  try { return JSON.parse(localStorage.getItem('ctvrtletni_protokoly_local') || '[]'); } catch(e) { return []; }
+}
+function saveLocalData(rows){
+  try { localStorage.setItem('ctvrtletni_protokoly_local', JSON.stringify(rows)); } catch(e) {}
+}
+async function saveProtocol(record){
+  if(firebaseAvailable && db){
+    await db.collection('protokoly').doc(record.id).set(record);
+  } else {
+    const rows = loadLocalData();
+    const idx = rows.findIndex(x => x.id === record.id);
+    if(idx >= 0) rows[idx] = record; else rows.unshift(record);
+    saveLocalData(rows);
+    data = rows;
+    render();
+  }
+}
+async function deleteProtocol(id){
+  if(firebaseAvailable && db){
+    await deleteProtocol(id);
+  } else {
+    data = loadLocalData().filter(x => x.id !== id);
+    saveLocalData(data);
+    render();
+  }
+}
+async function deleteAllProtocols(){
+  if(firebaseAvailable && db){
+    const snap = await db.collection('protokoly').get();
+    await Promise.all(snap.docs.map(d => d.ref.delete()));
+  } else {
+    localStorage.removeItem('ctvrtletni_protokoly_local');
+    data = [];
+    render();
+  }
+}
+function startLocalMode(){
+  data = loadLocalData();
+  render();
+}
 
 let data = [];
 let suggestionsStore = {};
@@ -363,7 +415,7 @@ function render(){
   if(filter === 'issues') rows = rows.filter(hasIssue);
   if(filter === 'ok') rows = rows.filter(r => !hasIssue(r));
   rows.sort((a,b)=>String(b.datum||'').localeCompare(String(a.datum||'')));
-  if(!rows.length){ els.list.innerHTML = '<div class="empty"><span class="badge badge-info">Firebase sync zapnutý</span><div style="margin-top:10px">Zatím tu nic není.</div></div>'; updateStats([]); return; }
+  if(!rows.length){ els.list.innerHTML = '<div class="empty"><span class="badge badge-info">Sdílení zapnuté</span><div style="margin-top:10px">Zatím tu nic není.</div></div>'; updateStats([]); return; }
   els.list.innerHTML = rows.map(r => `
     <div class="card">
       <div class="card-head">
@@ -373,7 +425,7 @@ function render(){
           <div class="badges">
             <span class="badge ${hasIssue(r)?'badge-warn':'badge-ok'}">${hasIssue(r)?'Se závadou':'Bez závad'}</span>
             <span class="badge badge-info">${countIssues(r)} × závada</span>
-            <span class="badge badge-info">Firebase sync zapnutý</span>
+            <span class="badge badge-info">Sdílení zapnuté</span>
           </div>
         </div>
         <div class="card-sub">${escapeHtml(formatDate(r.datum))}</div>
@@ -554,7 +606,7 @@ async function nextStep(){
   syncRevizeIssue(rec);
   syncModelPreferences(rec);
   rec.savedAt = new Date().toISOString();
-  await setDoc(doc(collection(db,'protokoly'), rec.id), rec);
+  await saveProtocol(rec);
   closeWizard();
   openPreviewById(rec.id);
 }
@@ -576,7 +628,7 @@ async function savePreviewRecord(){
     alert('Není otevřený žádný protokol k uložení.');
     return;
   }
-  await setDoc(doc(collection(db,'protokoly'), currentPreview.id), currentPreview);
+  await saveProtocol(currentPreview);
   alert('Protokol byl uložen.');
   closePreview();
 }
@@ -609,7 +661,7 @@ function downloadById(id){
 
 async function delById(id){
   if(!confirm('Opravdu smazat uložený protokol?')) return;
-  await deleteDoc(doc(collection(db,'protokoly'), id));
+  await deleteProtocol(id);
 }
 async function clearAllData(){
   if(!data.length) return;
@@ -619,8 +671,7 @@ async function clearAllData(){
     alert('Špatné heslo. Protokoly nebyly smazány.');
     return;
   }
-  const snap = await getDocs(collection(db,'protokoly'));
-  await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+  await deleteAllProtocols();
   alert('Všechny protokoly byly smazány.');
 }
 
@@ -888,7 +939,23 @@ try {
   els.qrBtn.classList.add('hidden');
 }
 
-onSnapshot(collection(db,'protokoly'), snap => { data = snap.docs.map(d => ({...d.data(), id:d.id})); render(); });
+if(firebaseAvailable && db){
+  db.collection('protokoly').onSnapshot(
+    snap => { data = snap.docs.map(d => ({...d.data(), id:d.id})); render(); },
+    err => {
+      console.error('Firebase sync error:', err);
+      els.list.innerHTML = '<div class="empty"><span class="badge badge-warn">Sdílení nejde</span><div style="margin-top:10px">Zkontroluj internet, Firebase pravidla nebo spuštění přes webový odkaz.</div></div>';
+      startLocalMode();
+    }
+  );
+} else {
+  startLocalMode();
+}
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+}
 </script>
 </body>
 </html>
