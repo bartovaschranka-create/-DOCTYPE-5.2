@@ -248,8 +248,30 @@ function getStepsForRecord(record){
 }
 
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
 
+  
+  const db = getFirestore(app);
+async function exportBackup() {
+  const snapshot = await getDocs(collection(db, "protokoly"));
+  const data = [];
+
+  snapshot.forEach((doc) => {
+    data.push({
+      id: doc.id,
+      ...doc.data()
+    });
+  });
+
+  const blob = new Blob(
+    [JSON.stringify(data, null, 2)],
+    { type: "application/json" }
+  );
+
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "protokoly_backup.json";
+  a.click();
+}
 let data = [];
 let suggestionsStore = {};
 let rec = {};
