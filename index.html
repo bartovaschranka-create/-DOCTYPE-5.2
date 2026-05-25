@@ -273,6 +273,7 @@ async function exportBackup() {
   a.download = "protokoly_backup.json";
   a.click();
 }
+window.exportBackup = exportBackup;
 let data = [];
 let suggestionsStore = {};
 let rec = {};
